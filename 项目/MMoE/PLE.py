@@ -1,94 +1,89 @@
-import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-import torch.optim as optim
-import random
-import pandas as pd
 from sklearn.metrics import roc_auc_score
-
-import warnings
-warnings.filterwarnings("ignore")
-
-random.seed(3)
-np.random.seed(3)
-seed = 3
-batch_size = 1024
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-class Expert(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size):
-        super(Expert, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, output_size)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.3)
-
-    def forward(self, x):
-        out = self.fc1(x)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc2(out)
-        return out
-
-class Tower(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size):
-        super(Tower, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, output_size)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.4)
-        self.sigmoid = nn.Sigmoid()
-    def forward(self, x):
-        out = self.fc1(x)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc2(out)
-        out = self.sigmoid(out)
-        return out
-
-class PLE(nn.Module):
-    def __init__(self, input_size, num_specific_experts, num_shared_experts, experts_out, experts_hidden, towers_hidden):
-        super(PLE, self).__init__()
-        self.input_size = input_size
-        self.num_specific_experts = num_specific_experts
-        self.num_shared_experts = num_shared_experts
-        self.experts_out = experts_out
-        self.experts_hidden = experts_hidden
-        self.towers_hidden = towers_hidden
-        self.experts_shared = nn.ModuleList([Expert(self.input_size, self.experts_out, self.experts_hidden) for i in range(self.num_shared_experts)])
-        self.experts_task1 = nn.ModuleList([Expert(self.input_size, self.experts_out, self.experts_hidden) for i in range(self.num_specific_experts)])
-        self.experts_task2 = nn.ModuleList([Expert(self.input_size, self.experts_out, self.experts_hidden) for i in range(self.num_specific_experts)])
-        self.soft = nn.Softmax(dim=1)
-        self.dnn1 = nn.Sequential(nn.Linear(self.input_size, self.num_specific_experts+self.num_shared_experts),
-                                 nn.Softmax())
-        self.dnn2 = nn.Sequential(nn.Linear(self.input_size, self.num_specific_experts + self.num_shared_experts),
-                                  nn.Softmax())
-        self.tower1 = Tower(self.experts_out, 1, self.towers_hidden)
-        self.tower2 = Tower(self.experts_out, 1, self.towers_hidden)
+from tqdm import tqdm
+import numpy as np
+from net import PLE
+from torch.utils.data import DataLoader
+from Dataset import censusData,load_and_process
 
 
-    def forward(self, x):
-        experts_shared_o = [e(x) for e in self.experts_shared]
-        experts_shared_o = torch.stack(experts_shared_o)
-        experts_task1_o = [e(x) for e in self.experts_task1]
-        experts_task1_o = torch.stack(experts_task1_o)
-        experts_task2_o = [e(x) for e in self.experts_task2]
-        experts_task2_o = torch.stack(experts_task2_o)
-
-        # gate1
-        selected1 = self.dnn1(x)
-        gate_expert_output1 = torch.cat((experts_task1_o, experts_shared_o), dim=0)
-        gate1_out = torch.einsum('abc, ba -> bc', gate_expert_output1, selected1)
-        final_output1 = self.tower1(gate1_out)
-
-        # gate2
-        selected2 = self.dnn2(x)
-        gate_expert_output2 = torch.cat((experts_task2_o, experts_shared_o), dim=0)
-        gate2_out = torch.einsum('abc, ba -> bc', gate_expert_output2, selected2)
-        final_output2 = self.tower2(gate2_out)
-
-        return [final_output1, final_output2]
+train_data, train_label, validation_data, validation_label, test_data, test_label, output_info = load_and_process()
+batch_size=1024
+train_loader=DataLoader(censusData(train_data,train_label),batch_size=batch_size,shuffle=True)
+val_loader=DataLoader(censusData(validation_data,validation_label),batch_size=batch_size,shuffle=True)
+test_loader=DataLoader(censusData(test_data,test_label),batch_size=batch_size,shuffle=True)
 
 
+expert_size=16
+tower_size=8
+lr=1e-3
+shared_num=2
+task_num=2
+exp_per_task=3
+n_epochs=80
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+model=PLE(input_size=train_data.shape[1],task_num=2,experts_per_task=exp_per_task,shared_experts=shared_num,expert_size=expert_size,num_layers=2)
+model.to(device)
+
+loss_fn=torch.nn.BCEWithLogitsLoss()
+optimizer=torch.optim.Adam(model.parameters(),lr=lr)
+
+def test(loader,model):
+    t1_pred,t2_pred,t1_tag,t2_tag=[],[],[],[]
+    model.eval()
+
+    with torch.no_grad():
+        for x,y in loader:
+            x,y=x.to(device),y.to(device)
+            yhat=model(x)
+            y1,y2=y[:,0],y[:,1]
+            yhat_1, yhat_2 = torch.sigmoid(yhat[0]), torch.sigmoid(yhat[1])
+
+            t1_tag.append(y1.cpu().numpy())
+            t2_tag.append(y2.cpu().numpy())
+
+            t1_pred.append(yhat_1.detach().cpu().numpy())
+            t2_pred.append(yhat_2.detach().cpu().numpy())
+    t1_tag=np.concatenate(t1_tag)
+    t2_tag=np.concatenate(t2_tag)
+
+    t1_pred=np.concatenate(t1_pred)
+    t2_pred=np.concatenate(t2_pred)
+
+    auc_1=roc_auc_score(t1_tag,t1_pred)
+    auc_2=roc_auc_score(t2_tag,t2_pred)
+    return auc_1,auc_2
+
+losses=[]
+val_loss=[]
+
+for epoch in tqdm(range(1,n_epochs+1)):
+    model.train()
+    epoch_loss=[]
+
+    for x,y in train_loader:
+        x,y=x.to(device),y.to(device)
+        y_hat=model(x)
+
+        y1,y2=y[:,0],y[:,1] # 真实标签
+        y_1,y_2=y_hat[0],y_hat[1] # 预测输出
+
+        loss1,loss2=loss_fn(y_1,y1.view(-1,1)),loss_fn(y_2,y2.view(-1,1))
+        loss=loss1+loss2
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        epoch_loss.append(loss.item())
+    losses.append(np.mean(epoch_loss))
+
+    auc1,auc2=test(val_loader,model)
+    if epoch==1 or epoch%10==0:print(f'epoch: {epoch}, train loss: {np.mean(epoch_loss)} val task1 auc: {auc1:.5f}, val task2 auc: {auc2:.3f}')
+
+auc1,auc2=test(test_loader,model)
+print(f'test auc1: {auc1:.3f}, test auc2: {auc2:.3f}')
+
+# test auc1: 0.949, test auc2: 0.994
