@@ -16,6 +16,5 @@ for i in range(0, len(y)-1):
             #统计所有正负样本对中，模型把相对位置排序正确的数量
             if(y[i]>y[j] and pred[i]>pred[j]) or (y[i]<y[j] and pred[i]<pred[j]):
                 numerator += 1
-
 print("AUC =" , numerator/denominator)
 print(roc_auc_score(y, pred))

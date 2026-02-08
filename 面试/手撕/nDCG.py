@@ -3,19 +3,29 @@ import numpy as np
 y    = np.array([1,0,1,0,0])
 pred = np.array([1,1,0,0,0])
 
-def nDCG(y, y_pred,k=10):
-    k=min(k,len(y))
-    ideal =sorted(y)[::-1][:k]
+def nDCG(y, y_pred, k=10):
+    y = np.asarray(y)
+    y_pred = np.asarray(y_pred)
 
-    order=np.argsort(y_pred)[::-1] # 按数值排序但是显示坐标
-    y_sorted=y[order][:k]
+    k = min(k, len(y))
 
-    denominator=np.log2(np.arange(2,k+2))
+    order = np.argsort(y_pred)[::-1]
+    rel = y[order][:k]
 
-    iDCG=np.sum(ideal/denominator)
-    DCG=np.sum(y_sorted/denominator)
+    # gain
+    gain = 2**rel - 1
 
-    return DCG/iDCG
+    discount = np.log2(np.arange(2, k + 2))
+    DCG = np.sum(gain / discount)
+
+    # ideal DCG
+    ideal_rel = np.sort(y)[::-1][:k]
+    ideal_gain = 2**ideal_rel - 1
+    iDCG = np.sum(ideal_gain / discount)
+
+    if iDCG == 0:
+        return 0.0
+    return DCG / iDCG
 
 
 print(nDCG(y, pred))

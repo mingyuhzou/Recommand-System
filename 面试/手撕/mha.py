@@ -63,11 +63,11 @@ class MultiHeadAttention(nn.Module):
         k=self.fc_k(k)
         v=self.fc_v(v)
 
-        # view拆为(batch, n_q, n_head，d_k)，permute后变为(head,batch,n_q,d_k),view->(head*batch,n_q,d_k)可以用attention计算所有的head
+        # view拆为(batch, n_q, n_head，d_k)，permute后变为(batch,head,n_q,d_k),view->(head*batch,n_q,d_k)可以用attention计算所有的head
         # view不改变数据的排列顺序，只是重新解释一块内存，要求tensor必须是contiguous
-        q=q.view(batch,n_q,n_head,d_q).permute(2,0,1,3).contiguous().view(-1,n_q,d_q)
-        k=k.view(batch,n_k,n_head,d_k).permute(2,0,1,3).contiguous().view(-1,n_k,d_k)
-        v=v.view(batch,n_v,n_head,d_v).permute(2,0,1,3).contiguous().view(-1,n_v,d_v)
+        q=q.view(batch,n_q,n_head,d_q).permute(0,2,1,3).contiguous().view(-1,n_q,d_q)
+        k=k.view(batch,n_k,n_head,d_k).permute(0,2,1,3).contiguous().view(-1,n_k,d_k)
+        v=v.view(batch,n_v,n_head,d_v).permute(0,2,1,3).contiguous().view(-1,n_v,d_v)
 
         # mask (batch,n_q,d_k)->(head*batch,n_q,d_k)
         if mask is not None:
@@ -75,9 +75,15 @@ class MultiHeadAttention(nn.Module):
         attn,output=self.attention(q,k,v,mask=mask)
 
         # 拼回来
-        output=output.view(n_head,batch,n_q,d_v).permute(1,2,0,3).contiguous().view(batch,n_q,-1)
+        output=output.view(batch,self.n_head,n_q,d_v).permute(0,2,1,3).contiguous().view(batch,n_q,-1)
         output=self.fc_o(output)
         return attn,output
+
+def softmax(x,dim):
+    x_max=torch.max(x,dim=dim,keepdim=True)
+    x_exp=torch.exp(x-x_max)
+    return x_exp/torch.sum(x_exp,dim=dim,keepdim=True)
+
 
 n_q,n_k,n_v=2,4,4
 d_q_,d_k_,d_v_=128,128,64

@@ -5,9 +5,10 @@ from mha import MultiHeadAttention
 
 class SelfAttention(nn.Module):
     def __init__(self, n_head,d_k,d_v,d_x,d_o):
-        self.wq=nn.Parameter(torch.Tensor(d_x,d_k))
-        self.wk=nn.Parameter(torch.Tensor(d_x,d_k))
-        self.wv=nn.Parameter(torch.Tensor(d_x,d_v))
+        super().__init__()
+        self.wq=nn.Parameter(torch.empty(d_x,d_k))
+        self.wk=nn.Parameter(torch.empty(d_x,d_k))
+        self.wv=nn.Parameter(torch.empty(d_x,d_v))
 
         self.mha=MultiHeadAttention(n_head,d_k_=d_k,d_v_=d_v,d_k=d_k,d_v=d_v,d_o=d_o)
         self.init_weights()
@@ -20,3 +21,4 @@ class SelfAttention(nn.Module):
 
         attn,output=self.mha(q,k,v,mask)
         return attn,output
+

@@ -9,7 +9,8 @@ def BCEloss(y,y_pred):
 
 def CE(y,y_pred):
     logits=y_pred-np.max(y_pred,axis=1,keepdims=True) # 防止数值太大溢出
-    probs=np.exp(logits)/np.sum(np.exp(logits),axis=1,keepdims=True) # [N,C]/[N,1]
+    probs=np.exp(logits)/np.sum(np.exp(logits),axis=1,keepdims=True) # [N,C]/[N,C] keepdim保留维度做广播，否则[N,C]/[N,]会报错
     log_probs=-np.log(probs[np.arange(len(y)),y]+eps)
     return np.mean(log_probs)
+
 
