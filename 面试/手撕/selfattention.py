@@ -21,4 +21,3 @@ class SelfAttention(nn.Module):
 
         attn,output=self.mha(q,k,v,mask)
         return attn,output
-

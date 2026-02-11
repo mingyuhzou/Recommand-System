@@ -16,7 +16,7 @@ def nDCG(y, y_pred, k=10):
     gain = 2**rel - 1
 
     discount = np.log2(np.arange(2, k + 2))
-    DCG = np.sum(gain / discount)
+    DCG = np.sum(gain / discount) # 注意求和
 
     # ideal DCG
     ideal_rel = np.sort(y)[::-1][:k]
@@ -27,5 +27,5 @@ def nDCG(y, y_pred, k=10):
         return 0.0
     return DCG / iDCG
 
-
+#
 print(nDCG(y, pred))
