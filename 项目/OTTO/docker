@@ -1,9 +1,0 @@
-sudo docker run --gpus all --rm -it \
-  -p 8888:8888 \
-  -p 8797:8787 \
-  -p 8796:8786 \
-  --ipc=host \
-  --cap-add SYS_NICE \
-  -v /home/mingyu/Recommand-System/项目/OTTO:/workspace \
-  -w /workspace \
-  nvcr.io/nvidia/merlin/merlin-pytorch:23.12 \

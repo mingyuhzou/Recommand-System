@@ -1,5 +1,0 @@
-conda install -c rapidsai -c nvidia -c conda-forge \
-    cudf=23.12 python=3.9 cudatoolkit=11.8
-conda install -c rapidsai -c nvidia -c conda-forge \
-    cuml=23.12 cudatoolkit=11.8
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
