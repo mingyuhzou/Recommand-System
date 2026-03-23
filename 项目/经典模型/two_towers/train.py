@@ -92,7 +92,7 @@ def build_all_item_embeddings():
         item_output = F.normalize(item_output, p=2, dim=-1)
 
         all_item_embs.append(item_output.cpu())
-        all_movie_ids.append(batch["mid"].cpu())
+        all_movie_ids.append(batch["movieId"].cpu())
 
     all_item_embs = torch.cat(all_item_embs, dim=0)   # [N, D]
     all_movie_ids = torch.cat(all_movie_ids, dim=0)   # [N]
@@ -111,12 +111,10 @@ def evaluate_recall_ndcg(k=50):
     model.eval()
 
     all_movie_ids, all_item_embs = build_all_item_embeddings()
-    all_item_embs = all_item_embs.to(device)  # [N, D]
+    all_item_embs = all_item_embs.to(device)
     all_movie_ids_device = all_movie_ids.to(device)
 
     gt_dict = build_test_gt_dict()
-
-    # 对每个 user 只保留一份 user embedding
     user_emb_dict = {}
 
     for batch in test_loader:
@@ -125,23 +123,23 @@ def evaluate_recall_ndcg(k=50):
         user_output = model.get_user_embedding(batch)
         user_output = F.normalize(user_output, p=2, dim=-1)
 
-        user_ids = batch["uid"].detach().cpu().tolist()
+        user_ids = batch["userId"].detach().cpu().tolist()
         user_output = user_output.detach().cpu()
 
-        for i, uid in enumerate(user_ids):
-            if uid not in user_emb_dict:
-                user_emb_dict[uid] = user_output[i]
+        for i, user_id in enumerate(user_ids):
+            if user_id not in user_emb_dict:
+                user_emb_dict[user_id] = user_output[i]
 
     recall_list = []
     ndcg_list = []
 
-    for uid, user_emb in user_emb_dict.items():
-        gt_items = gt_dict.get(uid, None)
+    for user_id, user_emb in user_emb_dict.items():
+        gt_items = gt_dict.get(user_id, None)
         if gt_items is None or len(gt_items) == 0:
             continue
 
-        user_emb = user_emb.to(device).unsqueeze(0)   # [1, D]
-        scores = torch.matmul(user_emb, all_item_embs.t()).squeeze(0)   # [N]
+        user_emb = user_emb.to(device).unsqueeze(0)
+        scores = torch.matmul(user_emb, all_item_embs.t()).squeeze(0)
 
         topk = min(k, scores.size(0))
         _, topk_indices = torch.topk(scores, topk, dim=0)
@@ -154,8 +152,8 @@ def evaluate_recall_ndcg(k=50):
         recall_list.append(recall)
 
         dcg = 0.0
-        for rank, mid in enumerate(pred_movie_ids):
-            if mid in gt_items:
+        for rank, movie_id in enumerate(pred_movie_ids):
+            if movie_id in gt_items:
                 dcg += 1.0 / math.log2(rank + 2)
 
         ideal_hits = min(len(gt_items), topk)
@@ -167,7 +165,6 @@ def evaluate_recall_ndcg(k=50):
     mean_ndcg = sum(ndcg_list) / len(ndcg_list) if ndcg_list else 0.0
 
     return mean_recall, mean_ndcg
-
 
 def train():
     best_recall = 0.0
@@ -194,13 +191,13 @@ def train():
         train_loss = total_loss / max(total_step, 1)
         val_recall, val_ndcg = evaluate_recall_ndcg(k=50)
 
-        print(
-            f"epoch={epoch + 1} "
-            f"train_loss={train_loss:.6f} "
-            f"recall@50={val_recall:.6f} "
-            f"ndcg@50={val_ndcg:.6f}"
-        )
-
+        if epoch%10==0:
+            print(
+                f"epoch={epoch + 1} "
+                f"train_loss={train_loss:.6f} "
+                f"recall@50={val_recall:.6f} "
+                f"ndcg@50={val_ndcg:.6f}"
+            )
         if val_recall > best_recall:
             best_recall = val_recall
 

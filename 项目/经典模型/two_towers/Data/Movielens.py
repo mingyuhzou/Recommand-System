@@ -68,6 +68,9 @@ class Movielens(Dataset):
 
     def __getitem__(self, idx):
         return {
+            "userId": torch.tensor(self.df["userId"][idx], dtype=torch.long),
+            "movieId": torch.tensor(self.df["movieId"][idx], dtype=torch.long),
+
             "uid": torch.tensor(self.users[idx], dtype=torch.long),
             "mid": torch.tensor(self.movies[idx], dtype=torch.long),
             "genres": torch.tensor(self.genres[idx], dtype=torch.long),
@@ -130,6 +133,7 @@ class Movies(Dataset):
 
     def __getitem__(self, idx):
         return {
+            "movieId": torch.tensor(self.df["movieId"][idx], dtype=torch.long),
             "mid": torch.tensor(self.movies[idx], dtype=torch.long),
             "genres": torch.tensor(self.genres[idx], dtype=torch.long),
             "title": torch.tensor(self.titles[idx], dtype=torch.long),
