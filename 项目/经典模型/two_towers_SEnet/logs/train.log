@@ -1,0 +1,14 @@
+2026-03-24 17:18:21,502 - INFO - epoch=1 train_loss=3.976017 recall@50=0.052026 ndcg@50=0.024094
+2026-03-24 17:18:21,533 - INFO - new best recall=0.052026, model saved
+2026-03-24 17:19:27,128 - INFO - epoch=2 train_loss=3.832716 recall@50=0.078013 ndcg@50=0.036041
+2026-03-24 17:19:27,134 - INFO - new best recall=0.078013, model saved
+2026-03-24 17:20:31,136 - INFO - epoch=3 train_loss=3.765595 recall@50=0.093402 ndcg@50=0.042653
+2026-03-24 17:20:31,143 - INFO - new best recall=0.093402, model saved
+2026-03-24 17:21:32,192 - INFO - epoch=4 train_loss=3.733950 recall@50=0.084535 ndcg@50=0.038307
+2026-03-24 17:21:32,192 - INFO - no improvement, wait=1/3
+2026-03-24 17:22:36,518 - INFO - epoch=5 train_loss=3.715895 recall@50=0.089460 ndcg@50=0.040327
+2026-03-24 17:22:36,518 - INFO - no improvement, wait=2/3
+2026-03-24 17:23:40,234 - INFO - epoch=6 train_loss=3.701631 recall@50=0.090225 ndcg@50=0.041257
+2026-03-24 17:23:40,234 - INFO - no improvement, wait=3/3
+2026-03-24 17:23:40,234 - INFO - early stopping triggered
+2026-03-24 17:23:40,234 - INFO - best_recall@50=0.093402

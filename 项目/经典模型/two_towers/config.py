@@ -33,7 +33,7 @@ model_cfg={
     "age_num":8,
 
     "batch_size":1024,
-    "epochs":100,
+    "epochs":200,
     "lr":0.001,
 
     "mlp_hidden_units":[128, 64]

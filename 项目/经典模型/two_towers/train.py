@@ -4,13 +4,22 @@ import torch
 from torch import optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-
+import logging
+import os
 from config import data_cfg, model_cfg
 from model.two_towers import TwoTowers
 from Data.Movielens import Movielens,Movies
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+log_dir = "./logs"
+os.makedirs(log_dir, exist_ok=True)
 
+logging.basicConfig(
+    filename=os.path.join(log_dir, "train.log"),
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 train_data = Movielens(
     data_path=data_cfg["train"],
@@ -168,6 +177,8 @@ def evaluate_recall_ndcg(k=50):
 
 def train():
     best_recall = 0.0
+    patience = 3
+    wait = 0
 
     for epoch in range(model_cfg["epochs"]):
         model.train()
@@ -191,18 +202,37 @@ def train():
         train_loss = total_loss / max(total_step, 1)
         val_recall, val_ndcg = evaluate_recall_ndcg(k=50)
 
-        if epoch%10==0:
+        logger.info(
+            f"epoch={epoch + 1} "
+            f"train_loss={train_loss:.6f} "
+            f"recall@50={val_recall:.6f} "
+            f"ndcg@50={val_ndcg:.6f}"
+        )
+
+        if epoch % 10 == 0:
             print(
                 f"epoch={epoch + 1} "
                 f"train_loss={train_loss:.6f} "
                 f"recall@50={val_recall:.6f} "
                 f"ndcg@50={val_ndcg:.6f}"
             )
+
         if val_recall > best_recall:
             best_recall = val_recall
+            wait = 0
+            torch.save(model.state_dict(), "best_model.pt")
+            logger.info(f"new best recall@50={best_recall:.6f}, model saved")
+        else:
+            wait += 1
+            logger.info(f"no improvement, wait={wait}/{patience}")
 
+            if wait >= patience:
+                logger.info("early stopping triggered")
+                print("Early stopping triggered")
+                break
+
+    logger.info(f"best_recall@50={best_recall:.6f}")
     print(f"best_recall@50={best_recall:.6f}")
-
 
 if __name__ == "__main__":
     train()

@@ -53,4 +53,6 @@ epoch=61 train_loss=6.321719 recall@50=0.095167 ndcg@50=0.041142
 epoch=71 train_loss=6.315387 recall@50=0.097932 ndcg@50=0.042245
 epoch=81 train_loss=6.311047 recall@50=0.096873 ndcg@50=0.041427
 epoch=91 train_loss=6.306791 recall@50=0.096504 ndcg@50=0.041205
-best_recall@50=0.100370
+best_recall@50=0.100370 
+
+多次实验结果有所波动，大概在0.95附近
