@@ -1,4 +1,4 @@
-# HUTS
+# HSTU
 
 受Transformer在视觉和语言方面成功的启发，作者想要将这种架构用于推荐领域。
 
@@ -17,6 +17,8 @@ DLRM不满足**缩放定律**，即使用了大量人工设计的特征及并给
 1. 特征没有显示的结构，不像语言领域中整齐配列，推荐领域下的特征高维异构
 2. 推荐领域的词表达到数十亿且动态变化带来了较高的推理成本
 3. 训练成本十分昂贵
+
+**从代码实现来看，该模型本质上仍然属于向量检索式推荐框架。模型首先将物品 id 映射为 item embedding，然后使用 HSTU 这类经过改造的 Transformer-style 序列编码器对用户历史行为序列进行上下文建模，得到每个历史位置的序列表示。验证或推理时，模型通常取用户历史序列中最后一个有效位置的输出向量作为当前用户兴趣表示，再将该用户向量与候选物料库中的 item embedding 进行点积打分，最终通过 MIPS / TopK 检索召回得分最高的物品。**
 
 ### 统一特征空间
 
@@ -86,6 +88,8 @@ A B C D E F
 B C D E F
 ```
 
+
+
 ### 层级序列转导单元
 
 与Transformer类似，**HSTU由L个相同的模块堆叠而成，每个模块包含三个子模块**，用一个统一模块同时替代 DLRM 中的特征提取，特征交叉，表示变换等组件。
@@ -139,6 +143,95 @@ $$
 + $Y(X)$：输出。$Y(X) \in R^{N \times d}$。 
 
 **核心内容**：**使用类似于Moe的操作，取代了Transformer中的两个线性层和一个FFN模块**，**减少了参数量和模型计算量**。
+
+## 代码理解笔记
+
+以 ML-1M 数据集为例。
+
+### 数据处理
+
+数据首先由 `preprocessor_public_data` 下载原始数据集，再通过 `research/data/preprocessor` 对原始 `dat` 文件进行预处理，包括格式转换、交互序列构造、数据集拆分以及 item id 编码等操作。当前模型主要使用用户与物品之间的交互序列数据，不直接使用电影的文本、类别等内容特征。
+
+在数据集构造阶段，`reco_dataset` 会根据时间顺序划分训练集、验证集和测试集。其核心思想是保留用户的历史交互序列，并将最新的若干交互从历史中截断出来，用作验证或测试目标。`DatasetV2` 作为 PyTorch Dataset，负责读取处理后的 csv 数据，并在 `load_item` 中完成序列解析、反转、截断和 padding。对于每个样本，数据会被划分为 `historical_ids` 和 `target_ids`：`historical_ids` 表示模型可见的历史行为，`target_ids` 表示需要预测的下一个物品。
+
+数据经过 `DataLoader` 之后，会进入 `movielens_seq_features_from_row`。该函数会把 batch 中的历史序列整理成模型需要的 `seq_features`，包括 `past_ids`、`past_lengths`、时间戳等字段。同时，它会在原有历史序列后面额外预留若干空位置，用于生成式推荐或自回归预测阶段。训练时，代码会通过 `scatter_` 将 `target_id` 写入历史序列后的第一个空位，使序列从 `[a, b, c, 0]` 变成 `[a, b, c, d]`。这样后续可以通过自回归方式构造监督信号，即用位置 `t` 的输出预测位置 `t+1` 的物品。
+
+需要注意的是，虽然训练时会把 `target_id` 临时填回序列末尾，但前面的 `historical_ids / target_ids` 划分仍然是必要的。划分的目的在于防止信息泄漏，保证验证和测试阶段模型只能看到历史行为，而不能提前看到待预测的目标物品。训练阶段的 `scatter_` 只是为了构造自回归训练序列，并不改变 target 作为监督标签的本质。
+
+### 模型组件
+
+`embedding_module` 使用 `LocalEmbeddingModule`，本质上是一个标准的 item embedding 层，用于将物品 id 映射为稠密向量。
+
+`_input_features_preproc` 使用 `LearnablePositionalEmbeddingInputFeaturesPreprocessor`，用于在 item embedding 上叠加可学习的位置编码，使模型能够区分序列中不同位置的物品。该模块还会执行 dropout，并结合 padding mask 处理无效位置。
+
+`relative_attention_bias_module` 使用 `RelativeBucketedTimeAndPositionBasedBias`，用于实现 HSTU attention 中的相对注意力偏置。它同时考虑相对位置和时间间隔，将时间差离散化到 bucket 后查表得到时间偏置，再与相对位置偏置相加，作为 attention score 的补充项。
+
+`_hstu_attention_maybe_from_cache` 是 HSTU 中 attention 计算的核心函数。它首先将 jagged 形式的 `q/k/v` 根据 `x_offsets` 还原为 padded dense 形式，然后计算 query 和 key 的点积注意力分数，并加入相对注意力偏置。经过激活、mask 和归一化后，再使用 attention 权重对 value 进行加权聚合。聚合完成后，输出会重新从 padded dense 转回 jagged values，以便后续只在有效 token 上继续计算。
+
+`SequentialTransductionUnitJagged` 是 HSTU 的基本层级序列转导单元。它先对输入序列进行 layer norm，然后通过一次线性投影得到 `u、v、q、k`。其中 `q/k` 用于计算 attention 权重，`v` 用于被 attention 聚合，`u` 则作为门控分支与 attention 输出逐元素相乘。最后经过输出线性层和残差连接，得到该层的序列表示。
+
+`HSTUJagged` 用于堆叠多个 `SequentialTransductionUnitJagged`。它在输入为 `[B, N, D]` 的 dense 序列时，会先调用 `dense_to_jagged` 去掉 padding，只保留有效 token；经过多层 HSTU 计算后，再通过 `jagged_to_padded_dense` 恢复为 `[B, N, D]` 的 padded dense 输出。
+
+`HSTU` 是完整的序列编码模型，负责将用户历史行为序列编码为上下文相关的序列表示。它内部组合了 embedding、输入预处理、HSTU 主体结构、输出后处理以及相似度计算模块。训练和验证时，模型输出的 `seq_embeddings` 表示每个历史位置经过上下文建模后的序列状态。
+
+`similarity_module` 使用 `DotProductSimilarity`，即点积相似度。它用用户侧序列表示和 item embedding 做内积，得到用户状态对候选物品的打分。
+
+### 训练过程
+
+训练时，batch 数据首先经过 `LocalEmbeddingModule` 得到 item embedding，然后输入 HSTU 模型，得到 `seq_embeddings`。该张量的形状通常为 `[B, N, D]`，其中每个位置表示对应历史位置经过 HSTU 编码后的序列状态。
+
+随后训练代码采用自回归预测方式构造 loss。具体来说，`seq_embeddings[:, :-1, :]` 作为预测输入，`supervision_ids[:, 1:]` 作为监督目标。也就是说，模型用第 `t` 个位置的输出向量预测第 `t+1` 个物品：
+
+```python
+output_embeddings = seq_embeddings[:, :-1, :]
+supervision_ids = supervision_ids[:, 1:]
+supervision_embeddings = input_embeddings[:, 1:, :]
+```
+
+例如序列为 `[a, b, c, d]`，则训练目标为：
+
+```text
+out(a) -> b
+out(b) -> c
+out(c) -> d
+```
+
+其中 `d` 就是前面通过 `scatter_` 填入的 `target_id`。因此，训练目标不是让“当前状态和下一个状态相似”，而是让“当前位置的序列输出向量”和“下一个真实 item 的 embedding”具有更高的点积相似度。
+
+loss 使用 `SampledSoftmaxLoss`。在进入 loss 内部后，`output_embeddings`、`supervision_ids`、`supervision_embeddings` 和 `supervision_weights` 会从 padded dense 形式转换为 jagged values，只保留有效训练位置。对于每个有效位置，模型会计算正样本 logit，即当前序列状态与真实下一个 item embedding 的点积；同时通过负采样器采样若干负样本，并计算当前序列状态与这些负样本 embedding 的点积。随后将正样本 logit 放在第 0 列，负样本 logits 放在后面，使用 `log_softmax` 计算交叉熵损失。
+
+如果负采样结果中包含了当前正样本，代码会通过 `torch.where` 将该负样本 logit 置为极小值，避免同一个 item 同时作为正样本和负样本参与 softmax。最终 loss 会乘以 `supervision_weights`，只对非 padding 的有效位置求平均。
+
+因此，训练阶段的核心目标可以概括为：
+
+```text
+让当前用户序列状态靠近真实下一个 item embedding，
+同时远离采样得到的负样本 item embedding。
+```
+
+### 验证过程
+
+验证阶段不再把 `target_id` 填入历史序列。模型只能看到用户的历史行为，通过 HSTU 编码得到用户当前状态表示。通常会使用 `get_current_embeddings` 从 `[B, N, D]` 的序列输出中取出每个用户最后一个有效位置的向量，作为当前用户兴趣表示。
+
+得到用户向量后，系统会使用 `CandidateIndex` 和 `TopKModule` 进行候选物品检索。以 `MIPSBruteForceTopK` 为例，它会将用户向量与候选库中所有 item embedding 做矩阵乘法：
+
+```text
+scores = user_embeddings @ item_embeddings.T
+```
+
+得到每个用户对所有候选 item 的打分，然后通过 `torch.topk` 取出分数最高的前 K 个物品。这里的分数本质上仍然是点积相似度，和训练阶段的 `DotProductSimilarity` 保持一致。
+
+为了避免推荐用户已经交互过的物品，`CandidateIndex.get_top_k_outputs` 会根据 `invalid_ids` 对 TopK 结果进行过滤。代码会先取 `k + invalid_ids数量` 个候选，再逐行过滤掉无效 item，最后保留前 `k` 个有效推荐结果。
+
+得到 `eval_top_k_ids` 后，验证代码会判断真实 `target_id` 在推荐列表中的排名。它将 `target_ids` 拼接到 `eval_top_k_ids` 的最后一列，保证每一行至少能找到一次 target。如果 target 出现在原始 TopK 中，则其位置就是真实排名；如果只在最后拼接的位置出现，则说明模型没有命中该 target，排名会被设置为 `MAX_K + 1`。
+
+基于 `eval_ranks` 可以进一步计算 HR、NDCG 和 MRR 等指标。HR@K 判断目标物品是否进入前 K；NDCG@K 在命中的基础上根据排名进行对数折扣，排名越靠前分数越高；MRR 则使用 `1 / rank` 衡量目标物品首次出现位置的倒数。对于 MovieLens 这类评分数据，代码还会根据 `target_ratings` 过滤正样本，例如只对评分大于等于 4 的目标物品计算部分指标，从而更关注用户真正喜欢的 item。
+
+
+
+
+
+
 
 ## 工程优化
 
