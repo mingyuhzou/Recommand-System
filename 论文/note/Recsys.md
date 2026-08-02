@@ -1,8 +1,10 @@
-> Tiger 生成式推荐一大方向，编码SID使用transformer结构做next-prediction
+> **Tiger** 生成式推荐一大方向，使用RQVAE编码SID，通过transformer做next-prediction
 >
-> What is GR 介绍生成式推荐
+> **What is GR** 介绍生成式推荐
 >
-> HSTU  生成式推荐一大方向，改造transformer decode应用于推荐领域
+> **HSTU**  生成式推荐一大方向，改造transformer decoder应用于推荐领域
+>
+> **ESAM** 解决SSB，做知识迁移
 >
 > 
 
@@ -798,7 +800,114 @@ $$
 
 最后，每一步更新后，对权重进行归一化：$\sum_i w_i(t) = T(任务数)$，以使梯度归一化过程与全局学习率解耦。
 
-## 结果
+
+
+# Din模型
+
+## 介绍
+
+Din模型将**attention机制引入到了用户兴趣建模上**，传统推荐模型（如 Wide&Deep、DeepFM）通常将用户历史行为（商品向量、商铺向量、商品类别向量）直接**平均池化**，对不同的候选item使用了相同的user embedding。
+
+![](./assets/image-20260318170401592.png)
+
+
+
+DIN在基础的embedding+MLP上使用了**Attention机制**，结合历史行为与候选物品的相关性，**自适应地计算用户兴趣表征向量**，该表征向量会随物品的不同而动态变化，最终提升用户兴趣的表达能力，从而提升CTR。
+
+DIN网络核心模块**Activation unit**，**为序列中每个历史item计算与当前候选物品的相关性权重**。
+
+![在这里插入图片描述](./assets/5345ba08cbc370ab784cfed1839ab1a8-1770087047732-85.png)
+
+先构造特征匹配$$\mathbf{z}_i = [\mathbf{e}_i,\ \mathbf{e}_a,\ \mathbf{e}_i - \mathbf{e}_a,\ \mathbf{e}_i \odot \mathbf{e}_a]$$，$$\mathbf{e}_i \in \mathbb{R}^d$$（历史点击物品的embedding），$$\mathbf{e}_a \in \mathbb{R}^d$$（候选物品的embedding），能让模型学习到差异和细粒度信息。得到的权重不会使用softmax机制进行归一化，目的是保留用户兴趣的强度信息。
+
+
+
+## Mini-batch Aware Regularization
+
+**Embedding** 参数量非常大时，传统 L2 正则化每个 batch 都要遍历整个 Embedding 表，计算代价太高。
+$$
+L_2(W) = \|W\|_2^2 = \sum_{j=1}^{K} \|w_j\|_2^2
+$$
+Mini-batch Aware Regularization（mini-batch感知正则化），该方法只对mini-batch中**出现过的特征对应的Embedding参数计算L2正则化**。
+
+$$
+L_2(W) = \sum_{j=1}^{K} \|w_j\|_2^2 = \sum_{(x,y) \in S} \sum_{j=1}^{K} \frac{I(x_j \neq 0)}{n_j} \|w_j\|_2^2\\
+$$
+
++ S：整个训练集 
++ x：一个样本的特征向量 y：标签，可以认为是模型的输入
++ $x_j$：样本 \(x\) 是否含有特征 $j$
++ $I(x_j \neq 0)$：指示函数，若样本里出现了特征$j$，值为 **1**，否则为 **0** 
++ $n_j$：特征$j$在整个训练集中出现的**总次数**
+
+例如某商品 $j$ 在训练集中出现 100 次，那么每次出现时计算：
+$$
+\frac{1}{100}\|w_j\|_2^2
+$$
+累计 100 次后：
+$$
+100\times\frac{1}{100}\|w_j\|_2^2
+=\|w_j\|_2^2
+$$
+**仍然等于**原来的 L2 正则项。
+
+
+
+假设训练集被划分为 $B$ 个 mini-batch：
+$$
+B_1,B_2,\ldots,B_B
+$$
+那么可以进一步写成：
+$$
+L_2(W)=
+\sum_{j=1}^{K}
+\sum_{m=1}^{B}
+\sum_{(x,y)\in B_m}
+\frac{I(x_j\neq0)}{n_j}
+\|w_j\|_2^2
+$$
+
+
+为了方便计算，作者做了近似，定义
+
+$$
+\alpha_{mj} = \max_{(x,y) \in B_m} I(x_j \neq 0)
+$$
+若第$m$个 batch 中至少有一个样本出现特征 $j$，则 $\alpha_{mj} = 1$, 否则 $\alpha_{mj} = 0$，按照batch级别计算
+$$
+L_2(W) \approx \sum_{j=1}^{K} \sum_{m=1}^{B} \frac{\alpha_{mj}}{n_j} \|w_j\|_2^2
+$$
+
+## Dice激活函数
+
+`PReLU`激活函数公式如下，它为负数区域增加了一个可学习的斜率
+$$
+f(x) =  \begin{cases} x, & x > 0 \\ \alpha x, & x \le 0 \end{cases}
+$$
+ 该激活函数的阈值为0，作者认为这个分界点不一定适合大规模、稀疏的CTR数据，应该让分界点自适应变化。
+
+
+
+`Dice`可看作PReLU的泛化形式。其核心思想是：根据输入数据的分布自适应调整整流点，将整流点设为输入的均值。此外，Dice实现了两条路径间的平滑切换。当E[s]=0且Var[s]=0时，Dice退化为PReLU。
+$$
+\mathrm{Dice}(x) = p(x)\cdot x + (1 - p(x)) \cdot \alpha x\\
+p(x) = \sigma\left(BN(x)\right)
+$$
+
++ $BN(x)$：BatchNorm，标准化输入
++ $\sigma$：Sigmoid
++ $p(x)$：输入为正的概率 
++ $\alpha$：可学习参数（类似 PReLU 的负斜率）
+
+
+
+## 改进
+
+Din的一个缺点在于忽略了**行为序列内部各元素之间的依赖关系**，目前较为常用的对用户行为序列建模的方法是采用双层Attention。
+
+![image-20251101153922319](./assets/image-20251101153922319-1769307607509-86-1770087047732-86.png)
+
+第一层attention得到的每个新元素都**融合了原始序列中其他物料的信息**，然后进入到Din模型。
 
 
 
@@ -1139,4 +1248,180 @@ watched movies:
 
 ## LLM缺陷
 
-GR推荐会受到LLM的影响，首先LLM会产生**幻觉**，即推荐不存在的物品，可以通过检索增强和前缀树来缓解幻觉；其次，使用人类真实的行为数据训练而来LLM本身存在**偏差**，这些数据中的偏差会被LLM学习，并且LLM可能会**加强**这种偏差，虽然有时这种偏差可以被视为个性化，但是二者的边界仍然模糊；
+GR推荐会受到LLM的影响，首先LLM会产生**幻觉**，即推荐不存在的物品，可以通过**检索增强和前缀树**来缓解幻觉；其次，使用人类真实的行为数据训练而来LLM本身存在**偏差**，这些数据中的偏差会被LLM学习，并且LLM可能会**加强**这种偏差，虽然有时这种偏差可以被视为个性化，但是二者的边界仍然模糊；
+
+
+
+
+
+# ESAM
+
+大多数排序模型都使用**已曝光**物品进行训练，随后模型被用于从**整个物品空间检索物品**，而整个物品空间同时包含已曝光和未曝光的物品。由于**SSB**，长尾物品缺少足够的交互记录来学习良好的特征表示，因此会导致模型在长尾物品上的性能较差。
+
+
+
+更糟糕的是，这种训练策略会导致模型**偏向**于热门物品，即优先检索热门物品，而忽略可能更适合于用户的新品。也就是所谓的**马太效应**。
+
+
+
+为此作者设计了`ESAM`，**将曝光物品中的知识迁移到未曝光物品中，从而缓解二者间分布不一致的问题**。最核心的思想是：**在训练数据中加入长尾物品，让模型可以见更多的数据，通过引入三个正则项学到有效的信息**
+
+
+
+## 模型
+
+### BaseModel
+
+文章定义了推荐领域的**BaseModel**的形式，ESAM所做的就是在BaseModel的物品侧增加了三个约束，以此实现**知识迁移**
+
+
+
+<img src="./assets/image-20260729105342283.png" alt="image-20260729105342283" style="zoom:50%;" />
+
+输入$q$ 查询和 $d^s$曝光物料经过$f_q \ f_d$网络，输出转换后的向量$v$，最后经过$f_s$计算像相关性分数，许多研究，例如Din，NeuralMF都集中在优化$f_q \ f_d$
+
+
+
+下图中方块、三角、圆点是三类拥有不同的**user feedback**的item（圆形-点击，三角形-观看时长....），图中的每个方块、三角、圆点代表映射后的**item embedding**，Y是训练好的**模型**，红色代表未曝光物品 target domain，蓝色代表曝光物品 source domain，黄色区域是模型召回的部分。
+
+![image-20260729141959271](./assets/image-20260729141959271.png)
+
+
+
+
+
+
+
+观察上图可以发现，BaseModel能够在已曝光物品中很好的完成任务，但是对两类物品映射后的embedding空间相差太大，这种分布空间上的差距造成了在“曝光item”上训练出来的模型作用于大量“未曝光物品”后表现较差。
+
+因此作者认为，当务之急是**学习一个新的$f_d$可以将"曝光item"与“未曝光item”映射到同一片向量区域。**
+
+### Domain Adaptation with Attribute Correlation Alignment
+
+基于**属性相关性对齐**的领域自适应，**该模块的作用是让曝光物品和未曝光物品的特征分布接近，使模型能够把在曝光物品上学习到的知识迁移到未曝光物品上。**
+
+
+
+作者认为物品元数据(low-level)属性之间的**相关性**，例如，品牌越奢侈价格越贵，在经过网络转换后得到的向量中(high-level)依然存在，如下图所示 	
+
+![image-20260729104728788](./assets/image-20260729104728788.png)
+
+
+
+
+
+因此作者定义 **A2C Loss**，对于每个$q$收集n个曝光物品，再随机抽取n个未曝光物品，计算映射后的**协方差**，**让两者之间的差距尽可能小**
+$$
+\begin{aligned}
+L_{DA} &= \frac{1}{L^2}\sum_{(j,k)} \big(\boldsymbol{h}_j^{s\top}\boldsymbol{h}_k^s - \boldsymbol{h}_j^{t\top}\boldsymbol{h}_k^t\big)^2 \\
+&= \frac{1}{L^2}\big\lVert \mathrm{Cov}(D^s) - \mathrm{Cov}(D^t) \big\rVert_F^2,
+\end{aligned}
+$$
+
++ $D_s = \left[ v_{d_1^s}; v_{d_2^s}; \dots; v_{d_n^s} \right] \in \mathbb{R}^{n \times L}$，对于$q$返回的曝光物品向量的集合
++ $D_t = \left[ v_{d_1^t}; v_{d_2^t}; \dots; v_{d_n^t} \right] \in \mathbb{R}^{n \times L}$，对于$q$返回的未曝光物品向量的集合
++ $h$是按列拆后的向量
+
+
+
+对BaseModel中取出的来自两个域的数据计算A2C，发现模型中两个域的分布的确有偏差
+
+| Source-Source | Target-Target | Source-Target |
+| :-----------: | :-----------: | :-----------: |
+|     9e-4      |     8e-4      |     0.076     |
+
+
+
+引入DA约束后，**学习到的映射函数的确能够将“曝光item”与“未曝光item”都映射到同一区域**，但是未曝光物品的分布依然杂乱。这是因为$L_{DA}$的限制还是太**粗粒度**了，假如，只有一对特征之间的协方差在两个域之间相差比较大，但是其他对的协方差减值都比较小，最终的$L_{DA}$还是会较小，但是却足以导致红色方块、三角、圆点之间的相对位置与蓝色方块、三角、圆点之间的相对位置，截然不同。
+
+![image-20260729173822235](./assets/image-20260729173822235.png)
+
+### **Center-Wise Clustering for Source Clustering**
+
+为了弥补$L_{DA}$的不足，ESAM的方法是**改善source domain中不同feedback的item的分布，使其高内聚低耦合**，**而target domain中item embedding的分布模仿source domain，因此可以期待target domain中item embedding的分布也能够”高内聚、低耦合“。**
+
+
+
+为此增加辅助函数$L_{DC}^c$
+$$
+\begin{align*}
+L_{\mathrm{DC}}^{c} &= \sum_{j=1}^{n} \max\left(0, \left\| \frac{\boldsymbol{v}_{d_{j}}^{s}}{\left\| \boldsymbol{v}_{d_{j}}^{s} \right\|} - \boldsymbol{c}_{q}^{y_{j}^{s}} \right\|_{2}^{2} - m_{1}\right) \\
+&\quad + \sum_{k=1}^{n_{y}} \sum_{u=k+1}^{n_{y}} \max\left(0, m_{2} - \left\| \boldsymbol{c}_{q}^{k} - \boldsymbol{c}_{q}^{u} \right\|_{2}^{2}\right) \\
+\boldsymbol{c}_{q}^{k} &= \frac{\sum_{j=1}^{n} \left( \delta(y_{j}^{s} = Y_{k}) \cdot \frac{\boldsymbol{v}_{d_{j}}^{s}}{\left\| \boldsymbol{v}_{d_{j}}^{s} \right\|} \right)}{\sum_{j=1}^{n} \delta(y_{j}^{s} = Y_{k})}
+\end{align*}
+$$
+
+
++ $c_q^k$  query $q$ 下，第 $k$ 类feedback物品的聚类中心
++ $n_y$ feedback种类数目
++ $m_1 \ m_2$ 类内距离限制和类间距离限制（不同的类至少保持多近，多元）
+
+
+
+这个task是针对**source domain**的，**第一项是同一个feedback的item embedding要高内聚，第二项是不同feedback的item embedding要低耦合**
+
+
+
+增加了$L_{DC}^c$作为辅助task之后，效果如下图所示
+
+![image-20260729181454264](./assets/image-20260729181454264.png)
+
+- 可以发现在source domain，不同feedback的item(蓝色的方块、三角、圆点)分离得更加清晰了
+- 因为target domain模仿source domain，所以在红色方块、三角、圆点在空间上也分离得更加清晰了
+- 但*红色方块、三角、圆点并不是按照feedback分离的，红色方块、三角、圆点混杂在一起*，所以模型还是无法很好的区分
+
+
+
+### Self-Training for Target Clustering
+
+对于一个查询，可以为未曝光物品增加一个**伪标签(pos/neg)**，因为此时的模型在进行领域对齐时，忽略了目标领域的标签信息，这种情况下，模型可能会把目标领域物品映射到错误的位置。带有伪标签的目标样本可以在领域对齐过程中，为模型提供额外的**判别信息**。
+
+
+
+因此，我们使用带有伪标签的样本进行**自训练**（self-training），以：
+
+1. **增加未曝光物品的训练记录数量；**
+2. **减少负迁移（negative transfer）**
+
+
+
+也就是最小化
+$$
+-p \log p
+$$
+这里的p是当前模型对未曝光物品的打分
+
+
+
+但是初期，模型的能力不足，无法正确预测未曝光物品，因此作者采用了**带约束的熵正则化（entropy regularization with constraint）**，选择具有**高置信度**的目标样本进行训练，中间的区域会被忽略
+$$
+L_{DC}^{p}
+=
+-
+\frac{
+\sum_{j=1}^{n}
+\delta
+(
+S_{q,d_j^t}<p_1
+|
+S_{q,d_j^t}>p_2
+)
+S_{q,d_j^t}
+\log S_{q,d_j^t}
+}
+{
+\sum_{j=1}^{n}
+\delta
+(
+S_{q,d_j^t}<p_1
+|
+S_{q,d_j^t}>p_2
+)
+}
+\tag{7}
+$$
+
+
+根据课程学习（curriculum learning）的思想，模型首先从高置信度目标样本中学习目标领域判别信息，随着模型能力的提升，会有越来越多的目标样本变成可靠样本，最终target domain 能形成清晰的正负类别结构。
+
+![image-20260730174602056](./assets/image-20260730174602056.png)
