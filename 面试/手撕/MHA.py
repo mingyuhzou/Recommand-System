@@ -99,55 +99,55 @@ import numpy as np
 # print(attn.size())
 # print(output.size())
 
+def Softmax(x):
+    x_max=torch.max(x,dim=-1,keepdim=True)[0]
+    x=x-x_max
+    x_exp=torch.exp(x)
+    return x_exp/torch.sum(x_exp,dim=-1,keepdim=True)
 
-def DotScaleAttention(q,k,mask):
-    weight=torch.matmul(q,k.transpose(1,2))/torch.sqrt(torch.tensor(k.shape[-1]))
+def DotScaleProduct(q,k,mask):
+    attn=torch.matmul(q,k.transpose(1,2))/torch.sqrt(torch.tensor(k.shape[-1]))
     if mask is not None:
-        weight.masked_fill_(mask,-np.inf)
-    return torch.softmax(weight,-1)
+        attn.masked_fill_(mask,-np.inf)
+    return Softmax(attn)
 
 class MHA(nn.Module):
-    def __init__(self,q_size,k_size,v_size,q_dim,k_dim,v_dim,o_dim,n_heads):
+    def __init__(self,q_len,k_len,v_len,q_size,v_size,k_size,q_dim,v_dim,k_dim,n_heads,o_dim):
         super(MHA,self).__init__()
-
-        self.n_heads=n_heads
+        self.q_len=q_len
+        self.k_len=k_len
+        self.v_len=v_len
         self.q_size=q_size
-        self.k_size=k_size
         self.v_size=v_size
+        self.k_size=k_size
         self.q_dim=q_dim
-        self.k_dim=k_dim
         self.v_dim=v_dim
+        self.k_dim=k_dim
+        self.n_heads=n_heads
+        self.o_dim=o_dim
 
         self.W_q=nn.Linear(q_size,q_dim*n_heads)
         self.W_k=nn.Linear(k_size,k_dim*n_heads)
         self.W_v=nn.Linear(v_size,v_dim*n_heads)
 
-        self.o=nn.Linear(v_dim*n_heads,o_dim)
+        self.W_o=nn.Linear(n_heads*v_dim,o_dim)
     def forward(self,q,k,v,mask):
-        Q,K,V=self.W_q(q),self.W_k(k),self.W_v(v)
-
-        q_len,k_len,v_len=Q.shape[1],K.shape[1],V.shape[1]
-
-        B=Q.shape[0]
+        B=q.shape[0]
+        q_len,k_len,v_len=self.q_len,self.k_len,self.v_len
+        q_dim,k_dim,v_dim=self.q_dim,self.k_dim,self.v_dim
         n_heads=self.n_heads
-        q_dim=self.q_dim
-        k_dim=self.k_dim
-        v_dim=self.v_dim
+
+        Q,K,V=self.W_q(q),self.W_k(k),self.W_v(v)
 
         Q=Q.view(B,q_len,n_heads,q_dim).permute(0,2,1,3).contiguous().view(-1,q_len,q_dim)
         K=K.view(B,k_len,n_heads,k_dim).permute(0,2,1,3).contiguous().view(-1,k_len,k_dim)
         V=V.view(B,v_len,n_heads,v_dim).permute(0,2,1,3).contiguous().view(-1,v_len,v_dim)
 
         if mask is not None:
-            mask=mask.repeat_interleave(n_heads,dim=0)
-        attn=DotScaleAttention(Q,K,mask)
+            mask=torch.repeat_interleave(mask,n_heads,dim=0)
+        weight=DotScaleProduct(Q,K,mask)
 
-        h=torch.matmul(attn,V)
-        h=h.view(B,n_heads,q_len,v_dim).permute(0,2,1,3).view(B,q_len,-1)
-        o=self.o(h)
-        return o
-def softmax(x):
-    x_max=torch.max(x,dim=-1,keepdim=True)[0]
-    x-=x_max
-    x_exp=torch.exp(x)
-    return x_exp/torch.sum(x_exp,dim=-1,keepdim=True)
+        h=torch.matmul(weight,V)
+        h=h.view(B,n_heads,q_len,v_dim).permute(0,2,1,3).contiguous().view(B,q_len,-1)
+        h=self.W_o(h)
+        return h

@@ -17,12 +17,11 @@ denominator = 0  #分母
 #             if(y[i]>y[j] and pred[i]>pred[j]) or (y[i]<y[j] and pred[i]<pred[j]):
 #                 numerator += 1
 
-
-for i in range(len(y)-1):
+for i in range(0,len(y)-1):
     for j in range(i,len(y)):
         if y[i]!=y[j]:
-            denominator += 1
-            if (y[i]>y[j] and pred[i]>pred[j]) or (y[i]<y[j] and pred[i]<pred[j]):
-                numerator += 1
+            denominator+=1
+            if (y[i]<y[j] and pred[i]<pred[j]) or (y[i]>y[j] and pred[i]>pred[j]):
+                numerator+=1
 print("AUC =" , numerator/denominator)
 print(roc_auc_score(y, pred))

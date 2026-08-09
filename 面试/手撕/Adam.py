@@ -35,4 +35,29 @@ import numpy as np
 #             print(f"iter {t}, loss {loss:.4f}, theta {theta}")
 #
 # adam()
+eps=1e-8
+x=np.random.randn(9,2)
+x1,x2=x[:,0],x[:,1]
+y=x1*3+x2*4+np.random.randn(x.shape[0])
 
+b1,b2=0.9,0.99
+lr=0.01
+
+theta=np.zeros(x.shape[1])
+m=np.zeros_like(theta)
+v=np.zeros_like(theta)
+
+for t in range(1,1001):
+    pred=x@theta
+    grad=1/len(y)*x.T@(pred-y)
+
+    m=b1*m+(1-b1)*grad
+    v=b2*v+(1-b2)*grad**2
+
+    m_hat=m/(1-b1**t)
+    v_hat=v/(1-b2**t)
+
+    theta-=lr/(np.sqrt(v_hat)+eps)*m_hat
+    if t % 50 == 0:
+        loss = np.mean((pred - y)**2)/2
+        print(f"iter {t}, loss {loss:.4f}, theta {theta}")
