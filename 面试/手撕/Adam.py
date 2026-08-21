@@ -43,21 +43,21 @@ y=x1*3+x2*4+np.random.randn(x.shape[0])
 b1,b2=0.9,0.99
 lr=0.01
 
-theta=np.zeros(x.shape[1])
+theta=np.zeros(x.shape[-1])
 m=np.zeros_like(theta)
 v=np.zeros_like(theta)
 
 for t in range(1,1001):
     pred=x@theta
     grad=1/len(y)*x.T@(pred-y)
-
     m=b1*m+(1-b1)*grad
     v=b2*v+(1-b2)*grad**2
 
-    m_hat=m/(1-b1**t)
-    v_hat=v/(1-b2**t)
+    m_t=m/(1-b1**t)
+    v_t=v/(1-b2**t)
 
-    theta-=lr/(np.sqrt(v_hat)+eps)*m_hat
+    theta-=lr/(np.sqrt(v_t)+eps)*m_t
+
     if t % 50 == 0:
         loss = np.mean((pred - y)**2)/2
         print(f"iter {t}, loss {loss:.4f}, theta {theta}")

@@ -31,16 +31,17 @@ pred = np.array([1,1,0,0,0])
 
 def nDCG(y,y_pred,k=10):
     k=min(k,len(y))
-    denominater=np.log2(np.arange(2,k+2))
 
-    order=np.argsort(y_pred)[::-1]
-    rel=y[order][:k]
+    order=np.log2(np.arange(2,k+2))
+
+    idx=np.argsort(y_pred)[::-1]
+    rel=y[idx][:k]
     gain=2**rel-1
-    dcg=np.sum(gain/denominater)
+
+    dcg=np.sum(gain/order)
 
     rel=np.sort(y)[::-1][:k]
     gain=2**rel-1
-    idcg=np.sum(gain/denominater)
+    idcg=np.sum(gain/order)
     return dcg/idcg
-
 print(nDCG(y, pred))
