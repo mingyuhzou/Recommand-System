@@ -22,8 +22,7 @@ eps=1e-8
 
 def BCE(y,y_pred):
     y_pred=np.clip(y_pred,eps,1-eps)
-    return -np.sum(y*np.log(y_pred)+(1-y)*np.log(1-y_pred))/len(y)
-
+    return -np.mean(y*np.log(y_pred)+(1-y)*np.log(1-y_pred))
 print(BCE(y,y_pred))
 
 
@@ -34,10 +33,10 @@ def CE(y,y_pred):
     logits=np.log(probs[np.arange(y.shape[0]),y])
     return -np.mean(logits)
 
-y=[0,2]
-y_pred=[
+y=np.array([0,2])
+y_pred=np.array([
  [3.0,1.0,0.2],
  [0.1,0.2,4.0]
-]
+])
 
 print(CE(y,y_pred))

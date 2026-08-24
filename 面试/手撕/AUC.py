@@ -25,3 +25,32 @@ for i in range(0,len(y)-1):
                 numerator+=1
 print("AUC =" , numerator/denominator)
 print(roc_auc_score(y, pred))
+
+def auc(y, pred):
+    """nlogn写法"""
+    order=pred.argsort()
+
+    n_pos = np.sum(y == 1)
+    n_neg = np.sum(y == 0)
+
+    sorted_pred = pred[order]
+    sorted_y = y[order]
+    neg_count=count_pair=0
+    i=0
+
+    while i<len(y):
+        j=i+1
+        while j<len(y) and sorted_pred[j]==sorted_pred[i]:
+            j+=1
+
+        group_y=sorted_y[i:j]
+        group_pos=sum(group_y==1)
+        group_neg=sum(group_y==0)
+
+        count_pair+=0.5*(group_pos*group_neg)
+        count_pair+=neg_count*group_pos
+
+        neg_count+=group_neg
+        i=j
+    return count_pair/(n_pos*n_neg)
+print(auc(y, pred))
