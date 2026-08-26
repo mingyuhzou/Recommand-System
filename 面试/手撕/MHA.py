@@ -99,5 +99,58 @@ import numpy as np
 # print(attn.size())
 # print(output.size())
 
+def softmax(x):
+    x=x-torch.max(x,dim=-1,keepdim=True)[0]
+    x_exp=torch.exp(x)
+    return x_exp/torch.sum(x_exp,dim=-1,keepdim=True)
 
+def DotScaleProduct(q,k,v,mask):
+    attn=torch.matmul(q,k.transpose(1,2))/torch.sqrt(torch.tensor(k.shape[-1]))
+    if mask is not None:
+        attn=attn.masked_fill(mask,-float('inf'))
+    attn=softmax(attn)
 
+    return torch.matmul(attn,v)
+
+class MHA(nn.Module):
+    def __init__(self,q_size,k_size,v_size,q_dim,k_dim,v_dim,n_heads,o_dim):
+        super().__init__()
+        self.q_dim=q_dim
+        self.k_dim=k_dim
+        self.v_dim=v_dim
+        self.o_dim=o_dim
+
+        self.q_size=q_size
+        self.k_size=k_size
+        self.v_size=v_size
+
+        self.n_heads=n_heads
+
+        self.W_q=nn.Linear(self.q_size,n_heads*q_dim)
+        self.W_k=nn.Linear(self.k_size,n_heads*k_dim)
+        self.W_v=nn.Linear(self.v_size,n_heads*v_dim)
+
+        self.W_o=nn.Linear(n_heads*v_dim,o_dim)
+
+    def forward(self,q,k,v,mask):
+
+        q_dim=self.q_dim
+        k_dim=self.k_dim
+        v_dim=self.v_dim
+
+        n_heads=self.n_heads
+
+        q_len,k_len,v_len=q.shape[1],k.shape[1],v.shape[1]
+        B=q.shape[0]
+
+        Q=self.W_q(q).view(B,q_len,n_heads,q_dim).permute(0,2,1,3).contiguous().view(-1,q_len,q_dim)
+        K=self.W_k(k).view(B,k_len,n_heads,k_dim).permute(0,2,1,3).contiguous().view(-1,k_len,k_dim)
+        V=self.W_v(v).view(B,v_len,n_heads,v_dim).permute(0,2,1,3).contiguous().view(-1,v_len,v_dim)
+
+        if mask is not None:
+            mask=mask.repeat_interleave(n_heads,dim=0)
+
+        h=DotScaleProduct(Q,K,V,mask)
+        h=h.view(B,n_heads,q_len,v_dim).permute(0,2,1,3).contiguous().view(B,q_len,-1)
+        o=self.W_o(h)
+        return o

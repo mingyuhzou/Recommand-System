@@ -53,4 +53,31 @@ def auc(y, pred):
         neg_count+=group_neg
         i=j
     return count_pair/(n_pos*n_neg)
+
+def auc(y,pred):
+    order=pred.argsort()
+
+    n_neg=np.sum(y==0)
+    n_pos=np.sum(y==1)
+
+    sorted_pred = pred[order]
+    sorted_y = y[order]
+
+    neg_count=0
+    count_pair=0
+    i=0
+    while i<len(y):
+        j=i+1
+        while j<len(y) and sorted_pred[j]==sorted_pred[i]:
+            j+=1
+        neg=np.sum(sorted_y[i:j]==0)
+        pos=np.sum(sorted_y[i:j]==1)
+
+        count_pair+=0.5*(neg*pos)
+        count_pair+=neg_count*pos
+
+        neg_count+=neg
+        i=j
+    return count_pair/(n_pos*n_neg)
+
 print(auc(y, pred))
