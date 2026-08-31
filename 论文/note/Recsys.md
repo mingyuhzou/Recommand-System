@@ -1679,5 +1679,95 @@ $$
 + 快手使用**在线训练**，每个 pass 训练完之后，需要把新参数同步到线上服务。对于巨量的embedding表，不能同步所有的参数，**而是每次只同步一小部分，也就是设置数量上限，或对更新频率低的参数暂时不同步。**
 + 视频场景下ID特征变化快，为了更好的捕捉底层Embedding的变化，同时稳定更新高层DNN参数，**二者采用不同的更新策略：前者使用AdaGrad后者使用adam(较小学习率，稳定更新)**
 
+# OneRec
 
 
+
+来自快手的生成式模型，**用一个端到端的生成模型统一完成召回和排序，替代传统的多阶段级联推荐系统**
+
+![image-20260829154409940](assets/image-20260829154409940.png)
+
+## Session-wise List Generation
+
+OneRec 不只预测用户下一个会看的视频，而是根据用户历史行为，一次生成**一组完整的推荐视频**。
+
++ **传统的逐点生成（pointwise）**：每次只预测下一个物品，各物品相对独立。为了避免生成结果内容重复、顺序不合理或缺少多样性，需要人工制定重排、去重和多样性规则。
++ **Session-wise 列表生成**：一次学习和生成整个推荐列表，同时考虑列表中物品之间的内容关系和先后顺序。
+
+
+
+定义一次用户请求返回的5-10个短视频为session，构造训练数据时筛选用户实际反馈较好的session作为label，定义高质量的session满足
+
++ 用户实际观看的视频数量不少于 5 个；
++ 用户观看整个 Session 的总时长超过阈值；
++ 用户产生点赞、收藏或分享等互动行为。
+
+## 模型结构
+
+模型结构还是基于T5(encoder-decoder)
+
+
+
+![image-20260829163616129](assets/image-20260829163616129.png)
+
+
+
+encoder输入用户历史行为，decoder输入高质量的session，做 CE loss
+
+## DPO
+
+上一步得到的模型可以进一步通过**DPO**增强能力，但是DPO需要如下的偏好对
+$$
+ (H_u, S_{\text{chosen}}, S_{\text{rejected}})
+$$
+在推荐系统中，一次曝光中**未点击的物品无法直接判断用户的偏好**，因为用户可能没看过。而用户与物品的交互数据非常稀疏（用户很少点踩），难以直接获得大量的偏好对，因此作者引入了**奖励模型**来估计用户对不同推荐结果的偏好程度。
+
+我们使用$R(\mathbf{u},\mathcal{S})$ 表示奖励模型，$S={v_1,v_2,\dots,v_m}$是session，这里奖励模型是对序列打分而不是单个物品。
+
+为了训练奖励模型对不同Session进行排序的能力，首先为session中的每个物品提取目标感知，这里$u$是用户序列表示，文中没有给出如何计算
+$$
+e_i = v_i \odot u
+$$
+在得到了目标感知序列$h={e_1,e_2,\dots,e_m}$后，经过自注意力层融合不同物品间的必要信息
+$$
+h_f=\text{SelfAttention}\left(hW_s^Q,\,hW_s^K,\,hW_s^V\right)
+$$
+随后使用任务塔预测多个目标对应的奖励
+$$
+\
+\begin{aligned}
+\hat{r}^{swt} &= \text{Tower}^{swt}\big(\text{Sum}(\mathbf{h}_f)\big),\\
+\hat{r}^{vtr} &= \text{Tower}^{vtr}\big(\text{Sum}(\mathbf{h}_f)\big),\\
+\hat{r}^{wtr} &= \text{Tower}^{wtr}\big(\text{Sum}(\mathbf{h}_f)\big),\\
+\hat{r}^{ltr} &= \text{Tower}^{ltr}\big(\text{Sum}(\mathbf{h}_f)\big),
+\end{aligned}
+\\
+其中 \ \text{Tower}(\cdot)=\text{Sigmoid}\big(\text{MLP}(\cdot)\big)
+$$
+最后通过**交叉熵损失**来训练奖励模型，推理时将得分高的作为chosen，得分最低的作为rejected
+
+![image-20260829173346069](assets/image-20260829173346069.png)
+
+随后可以训练DPO
+$$
+
+\begin{aligned}
+\mathcal{L}_{\text{DPO}} &= \mathcal{L}_{\text{DPO}}\big(S_u^w,\,S_u^l \mid \mathcal{H}_u\big) \\
+&= -\log\sigma\left(
+\beta\log\frac{M_{t+1}(S_u^w\mid\mathcal{H}_u)}{M_{t}(S_u^w\mid\mathcal{H}_u)}
+-\beta\log\frac{M_{t+1}(S_u^l\mid\mathcal{H}_u)}{M_{t}(S_u^l\mid\mathcal{H}_u)}
+\right)
+\end{aligned}
+$$
+
+
+在DPO训练过程中，为了减小beam search 和 Reward model的开销，在每一轮中**只抽取1%的用户样本**做DPO（继续增大能带来的提升非常小，但计算成本线性增加），其余数据继续做监督训练，最终的损失是两部分合起来。
+
+每轮 $t$ 的流程是：
+
+1. 使用当前模型 $M_t$ 做 **Beam Search**，生成候选 Session。
+2. 使用 RM 打分，构造偏好数据 $D_t^{\mathrm{pairs}}$。
+3. 在训练开始前冻结 $M_t$，将它作为本轮参考模型。
+4. 从 $M_t$ 初始化策略模型 $M_{t+1}$，使用 $D_t^{\mathrm{pairs}}$ 训练。
+5. 训练完成后，$M_{t+1}$ 成为下一轮的当前模型。
+6. 下一轮再冻结 $M_{t+1}$，训练 $M_{t+2}$。
